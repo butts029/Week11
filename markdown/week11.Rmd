@@ -1,0 +1,241 @@
+---
+title: "Week 11 Project: Machine Learning"
+output: html_notebook
+---
+
+# RStudio API Code
+
+```{r}
+library(rstudioapi)
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+# Libraries
+
+```{r, message = FALSE}
+library(Hmisc)      # for importing spss data file
+library(tidyverse)  # for data cleaning
+library(caret)      # for processing data and performing cross-validation
+library(knitr)      # for formatting tables
+```
+
+# Data Import and Cleaning
+
+Steps:
+
+1. Import data from SPSS data file
+2. Select the personality and health variables
+3. Convert "\<NA\>" labels into true NA values 
+    - Note that answers of 8 (don't know), 9 (refused to answer), and 0 (not applicable) are all treated as missing values because these responses do not actually give us any information.
+4. Remove observations that are missing all predictors or all predictors and response because these observations do not give us any information.
+5. Convert all variables into numeric type.
+6. Convert to a tibble instead of a data frame.
+
+```{r, message=FALSE, warning=FALSE}
+# Import data from spss data file and select desired variables
+gss_tbl <- spss.get("../data/GSS2006.sav") %>%
+              select(starts_with("BIG5"), "HEALTH")  %>%
+              mutate_all(.funs = function(x) ifelse(x == "<NA>", NA, x)) %>%
+              # Rows missing 10 responses are missing all predictors
+              # Rows missing 11 responses are missing all predictors and response
+              # Want all the rows that do not have 10 or 11 responses missing
+              filter(!(apply(., 1, function(x){sum(is.na(x))}) %in% c(10,11))) %>%
+              mutate_all(as.numeric) %>%
+              as_tibble() 
+```
+
+# Analysis
+
+Steps:
+
+1. Set a seed for reproducible results
+2. Preprocess the data
+    - Use knn imputation to impute missing values; we use knn imputation since it has weaker assumptions on the type of missingness (MAR instead of MCAR).
+    - Perform centering and scaling (done automatically as part of knn imputation)
+3. Create a holdout sample and training sample.
+4. Create 10 folds of the data so that all methods compared will use the exact same folds.
+5. Fit the four different models using training data and test on holdout sample.
+    - Ordinary Least Squares (OLS) Regression
+    - Elastic Net Regression
+    - Support Vector Machine (SVM) Regression
+    - Extreme Gradient Boosted Regression
+
+```{r, cache = TRUE}
+# set the seed for reproducibility
+set.seed(777)
+
+# preprocessing of data
+preprocess <- preProcess(gss_tbl, method = "knnImpute")
+imputed_tbl <- predict(preprocess, gss_tbl)
+
+# Create a holdout and training sample
+rows <- sample(x = nrow(imputed_tbl), size = 250, replace = F)
+holdout <- imputed_tbl[rows,]
+train <- imputed_tbl[-rows, ]
+
+# create 10 folds so that folds will be the same for all methods used
+folds <-  createFolds(train$HEALTH, 10)
+
+# Run OLS regression and compute 10-fold cv statistics
+ols_model <- train(HEALTH ~ (.)^2,
+                   data = train,
+                   method = "lm",
+                   trControl = trainControl(method = "cv",
+                                            indexOut = folds,
+                                            verboseIter = F)
+)
+
+ols_model
+
+# Calculate holdout performance - MAE, RMSE, R squared
+ols_holdout <- predict(ols_model, holdout)
+ols.mae <- mean(abs(ols_holdout - holdout$HEALTH))
+ols.rmse <- sqrt(mean((ols_holdout - holdout$HEALTH)^2))
+ols.SSE <- sum((ols_holdout - holdout$HEALTH)^2)
+ols.SST <- (nrow(holdout) - 1) * var(holdout$HEALTH)
+ols.rsq <- 1-(ols.SSE/ols.SST)
+ols.mae
+ols.rmse
+ols.rsq
+
+# Run elastic net regression
+enet_model <- train(HEALTH ~ (.)^2,
+                   data = train,
+                   method = "glmnet",
+                   trControl = trainControl(method = "cv",
+                                            indexOut = folds,
+                                            verboseIter = F)
+)
+
+enet_model
+
+# Calculate holdout performance - MAE, RMSE, R squared
+enet_holdout <- predict(enet_model, holdout)
+enet.mae <- mean(abs(enet_holdout - holdout$HEALTH))
+enet.rmse <- sqrt(mean((enet_holdout - holdout$HEALTH)^2))
+enet.SSE <- sum((enet_holdout - holdout$HEALTH)^2)
+enet.SST <- (nrow(holdout) - 1) * var(holdout$HEALTH)
+enet.rsq <- 1-(enet.SSE/enet.SST)
+enet.mae
+enet.rmse
+enet.rsq
+
+# Run SVM regression
+svm_model <- train(HEALTH ~ (.)^2,
+                   data = train,
+                   method = "svmLinear2",
+                   trControl = trainControl(method = "cv",
+                                            indexOut = folds,
+                                            verboseIter = F)
+)
+
+svm_model
+
+# Calculate holdout performance - MAE, RMSE, R squared
+svm_holdout <- predict(svm_model, holdout)
+svm.mae <- mean(abs(svm_holdout - holdout$HEALTH))
+svm.rmse <- sqrt(mean((svm_holdout - holdout$HEALTH)^2))
+svm.SSE <- sum((svm_holdout - holdout$HEALTH)^2)
+svm.SST <- (nrow(holdout) - 1) * var(holdout$HEALTH)
+svm.rsq <- 1-(svm.SSE/svm.SST)
+svm.mae
+svm.rmse
+svm.rsq
+
+# Run extreme gradient boosted regression
+egb_model <- train(HEALTH ~ (.)^2,
+                   data = train,
+                   method = "xgbLinear",
+                   trControl = trainControl(method = "cv",
+                                            indexOut = folds,
+                                            verboseIter = F)
+)
+
+egb_model
+
+# Calculate holdout performance - MAE, RMSE, R squared
+egb_holdout <- predict(egb_model, holdout)
+egb.mae <- mean(abs(egb_holdout - holdout$HEALTH))
+egb.rmse <- sqrt(mean((egb_holdout - holdout$HEALTH)^2))
+egb.SSE <- sum((egb_holdout - holdout$HEALTH)^2)
+egb.SST <- (nrow(holdout) - 1) * var(holdout$HEALTH)
+egb.rsq <- 1-(egb.SSE/egb.SST)
+egb.mae
+egb.rmse
+egb.rsq
+```
+
+```{r}
+# Compre the results of the 10-fold cross-validation
+compare <- summary(resamples(list("OLS Regression" = ols_model, 
+               "Elastic Net Regression" = enet_model, 
+               "Support Vector Regression" = svm_model, 
+               "Extreme Gradient Boosting" = egb_model)))
+
+MAE <- c(1,4,7,10)
+RMSE <- c(2,5,8,11)
+RSq <- c(3,6,9,12)
+
+# Table of Mean Absolute Error
+kable(rbind("Minimum" = apply(compare$values[,MAE], 2, min),
+            "Mean" = apply(compare$values[,MAE], 2, mean),
+            "Median" = apply(compare$values[,MAE], 2, median),
+            "Maximum" = apply(compare$values[,MAE], 2, max)),
+      col.names = compare$models,
+      align = "c",
+      caption = "Mean Absolute Error",
+      format = "pandoc",
+      digits = 3)
+
+# Table of Root Mean Square Error
+kable(rbind("Minimum" = apply(compare$values[,RMSE], 2, min),
+            "Mean" = apply(compare$values[,RMSE], 2, mean),
+            "Median" = apply(compare$values[,RMSE], 2, median),
+            "Maximum" = apply(compare$values[,RMSE], 2, max)),
+      col.names = compare$models,
+      align = "c",
+      caption = "Root Mean Square Error",
+      format = "pandoc",
+      digits = 3)
+
+# Table of R squared 
+kable(rbind("Minimum" = apply(compare$values[,RSq], 2, min),
+            "Mean" = apply(compare$values[,RSq], 2, mean),
+            "Median" = apply(compare$values[,RSq], 2, median),
+            "Maximum" = apply(compare$values[,RSq], 2, max)),
+      col.names = compare$models,
+      align = "c",
+      caption = "R-Squared",
+      format = "pandoc",
+      digits = 3)
+
+# Table of Holdout Sample Values
+kable(rbind("OLS Regression" = c(ols.mae, ols.rmse, ols.rsq),
+            "Elastic Net Regression" = c(enet.mae, enet.rmse, enet.rsq),
+            "Support Vector Regression" = c(svm.mae, svm.rmse, svm.rsq),
+            "Extreme Gradient Boosting" = c(egb.mae, egb.rmse, egb.rsq)),
+      col.names = c("MAE", "RMSE", "R-Squared"),
+      align = "c",
+      caption = "Holdout Sample Performance",
+      digits = 3,
+      format = "pandoc")
+```
+
+The results of the OLS regression, elastic net regression, and support vector regression are all very similar in terms of the cross-validated error statistics. The extreme gradient boosting model had much lower MAE and RMSE and much higher $R^2$ values than the other three models. I think that these results are due to extreme gradient boosting being an ensemble method whereas the others are not. The extreme gradient boosting model is a combination of a lot simpler base models of the same type, and the other three methods are a base model themselves. 
+
+The tuning parameters that worked best for the elastic net are $\alpha$ = 0.1 and $\lambda$ = 0.02649677. This $\alpha$ parameter means that the regression is 10% Lasso and 90% ridge regression. The $\lambda$ controls how much regularization occurs; since it is pretty small, there is not much regularization.
+
+
+# Visualization
+
+```{r}
+# 10-fold CV performance comparison across models
+dotplot(resamples(list("OLS Regression" = ols_model, 
+                       "Elastic Net Regression" = enet_model, 
+                       "Support Vector Regression" = svm_model, 
+                       "Extreme Gradient Boosting" = egb_model)))
+```
+
+It is more difficult to choose one model because the cross-validation statistics and the holdout sample performance tell different stories. Based on the cross-validation statistics, the extreme gradient boosting is by far the best performer; it has small error and explains more variation. However, in the holdout sample, extreme gradient boosting had the highest errors and lowest $R^2$ values. Based on the holdout sample, I would probably select the elastic net model because it has the lowest MAE and RMSE and the highest $R^2$ value. Since the holdout sample more closely resembles performance on completely new data, I would probably prefer the elastic net. It also runs pretty quickly. 
+
+There are some tradeoffs between the models. The OLS runs the fastest followed by elastic net and support vector regression. The slowest by far is the extreme gradient boosting because it is an ensemble approach and has more parameters to tune. If speed is an issue, one might select the OLS regression. The OLS regression model is probably the easiest to interpret, so one may choose the OLS regression if the goal is interpretability. 
